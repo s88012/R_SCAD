@@ -1,0 +1,520 @@
+
+
+##################################################
+###         Function: R_SCAD_v1                ###
+### Argumnts ######################################################################################
+## YY: response
+## XX: main effects having variable names
+## interNam: interaction table for estimation (each row has the name1 and name2 from main effects)
+## offnam: names of the offset varaibles.
+## fam_id: family_number
+## crt_cut(0.0001): Criteria for convergecne. If not convergened, only 10 iterations will be performed.
+##################################################################################################
+
+### Results ######################################################################################
+## YY: response
+## mXX: main effetcs
+## interx: interaction effects
+## nam: variable names for cbind(1,mXX,interX)
+## bt: coeff. of cbind(1,mXXminterX)
+## r: ratio of variance of random effects w.r.t total variance
+##################################################################################################
+
+## Neglecting the warnings!! ##
+
+R_SCAD_v1 = function(YY=YY,XX=XX,offnam=offnam,interNam=interNam,fam_id=fam_id,crt_cut=crt_cut)  {   
+
+
+############################# 
+###### Data proceeding   
+#############################
+
+Nam = colnames(XX)
+mXX = XX 
+
+## optname = colnames(mXX)
+## ipp = names(table(interNam))
+## for (j in 1:length(ipp)) 
+##                      {    
+##    c = which(optname==ipp[j])
+##    if (length(c)>0) {
+##    optname = optname[-c]           
+##                      }
+##                       }
+optname = offnam                        
+
+## Making the interaction variables ## 
+
+interX = matrix(0,nrow(mXX),nrow(interNam))
+colnames(interX) = paste(interNam[,1],interNam[,2],sep=':')
+
+for ( j in 1:ncol(interX)) {
+  interX[,j] = mXX[,which(colnames(mXX)==interNam[j,1])]*
+               mXX[,which(colnames(mXX)==interNam[j,2])]
+                           }                  
+
+## Deleting the interaction variables having 0 s.d. ##
+
+mm = apply(interX,2,sd) 
+idx = which(mm==0)  
+if (length(idx)>0)  {    
+   interX = interX[,-idx] 
+   interNam = interNam[-idx,]
+                       }  
+mXX = as.matrix(mXX)
+interX = as.matrix(interX) 
+
+c0 = ncol(mXX) 
+c12 = ncol(interX)  
+n = c(0,table(fam_id))  
+FN = length(n)-1   
+N = length(YY)                                     
+ 
+###################### ;
+## ** R_SACD : BIC  ## ;
+###################### ;
+  
+## Initializing for beta1(main), beta2(interaction) and rho
+
+bt1 = rep(0,c0)  
+bt2 = rep(0,1+c12) 
+r = 0.0 
+
+## Initializinf for others 
+
+psi.inv.half=psi=matrix(0,sum(n),sum(n)) 
+iop = 0.0 
+r = 0.00  
+crtt = 1.0   
+r.v = 1 
+bt0 = c(bt1,bt2)  
+
+#while ( crtt  > 0.05 & iop <= 10 ) { 
+while ( crtt  > crt_cut & iop <= 10 ) { ## corrected by KJY
+
+
+   iop = iop + 1 
+
+  for ( j in 1:FN) { 
+    st = sum(n[1:j])+1  
+    ed = sum(n[1:(j+1)]) 
+    psi[st:ed,st:ed] = (1-r)*diag(1,n[j+1])+r*matrix(1,n[j+1],n[j+1]) 
+    gg =  eigen(psi[st:ed,st:ed]) 
+    psi.inv.half[st:ed,st:ed] =
+    gg$vectors%*%diag(1/sqrt(gg$values))%*%t(gg$vectors)  } 
+  
+#################################################################### ;
+# step 1 : updating beta2
+
+ r2 = psi.inv.half %*%(YY-as.numeric(cbind(mXX)%*%bt1)) 
+ XX = psi.inv.half %*% interX  
+ nXX = ncol(XX)
+
+ yy = (r2-mean(r2))/sd(r2)
+ xx = XX 
+ mcv = matrix(0,nXX,2) 
+
+ for ( j in 1:nXX) { 
+                mcv[j,1] = mean(XX[,j])  
+                mcv[j,2] = sd(XX[,j]) 
+                xx[,j] = (XX[,j] - mcv[j,1])/mcv[j,2]  
+                   } 
+ 
+ rpp = L2.SCAD(xx[,],yy,1.0,1.0,max.iter,0,break.rule=50/1)  
+ rbeta = rep(0,nXX+1) 
+ taberr = matrix(0,nrow(rpp$SCAD.beta.mat),2) 
+ taberr[,1] = rpp$SCAD.lambda  
+
+ for ( j in 1:nrow(taberr) ) {      
+    rsd = yy - xx%*%(rpp$SCAD.beta.mat[j,])  
+    taberr[j,2] = log(mean(rsd^2))+sum(rpp$SCAD.beta.mat[j,]!=0)*log(N)/N  
+                             }   
+    min.loc = which.min(taberr[,2]) ;  
+
+ for ( j in 1:nXX) { 
+    rbeta[j+1] = sd(r2)*rpp$SCAD.beta.mat[min.loc,][j]/mcv[j,2] 
+                   } 
+ rbeta[1] =  mean(r2)-sd(r2)*sum(rpp$SCAD.beta.mat[min.loc,]*mcv[,1]/mcv[,2]) ; ####?????
+ bt2 = rbeta ;
+
+#################################################################### ;
+# step 2 : updating beta1
+
+idx1 = ' ' 
+ix = which(bt2[-1] != 0 )
+if (length(ix)>0)  {
+  for ( j in 1:length(ix))  {    
+     idx1 =  c(idx1,interNam[ix[j],1],interNam[ix[j],2])      
+                            }
+                    }
+idx1 =  c(names(table(idx1)),optname)
+idx1 = names(table(idx1))
+idx1 = idx1[which(idx1!=' ')]
+Q = length(idx1) 
+loc = rep(0,Q)
+
+if (Q>=1)      {
+for (j in 1:Q) { loc[j] = which(colnames(mXX)==idx1[j]) }
+               }  
+  
+r1 = psi.inv.half %*%(YY-cbind(1,interX)%*%bt2) 
+XX = psi.inv.half %*% mXX  
+nXX = ncol(XX)  
+
+print(c("Q = ", Q)) 
+
+
+
+###########  DONE UP TO  HERE  ########
+
+
+if (Q==0)           
+                                         {  
+  xx = XX 
+  #yy = (r1-1*mean(r1))/sd(r1)
+  yy = (r1-0*mean(r1))/sd(r1)                            ## Correction ## 
+ 
+  mcv = matrix(0,nXX,2) 
+  for ( j in 1:nXX) 
+              { 
+                mcv[j,1] = mean(XX[,j])  
+                mcv[j,2] = sd(XX[,j]) 
+                #xx[,j] = (XX[,j] - 1*mcv[j,1])/mcv[j,2]      
+                xx[,j] = (XX[,j] - 0*mcv[j,1])/mcv[j,2]  ## Corection ##     
+
+              } 
+  
+ rpp = L2.SCAD(xx,yy,1.0,1.0,max.iter,0,break.rule=50) 
+ rbeta = rep(0,nXX+0)  
+ taberr = matrix(0,nrow(rpp$SCAD.beta.mat),2) 
+ taberr[,1] = rpp$SCAD.lambda  
+  
+ for ( j in 1:nrow(taberr)) 
+                           {   
+    rsd = yy - xx%*%(rpp$SCAD.beta.mat[j,])  
+    taberr[j,2] = log(mean(rsd^2))+sum(rpp$SCAD.beta.mat[j,]!=0)*log(N)/N  
+                           }   
+    min.loc = which.min(taberr[,2])   
+  
+  for ( j in 1:nXX) 
+                   { 
+    rbeta[j] = sd(r1)*rpp$SCAD.beta.mat[min.loc,][j]/mcv[j,2]  
+                   } 
+  #bt2[1] = bt2[1]+1*mean(r1)-sd(r1)*sum(rpp$SCAD.beta.mat[min.loc,]*mcv[,1]/mcv[,2]) ## Correction   
+  bt1 = rbeta    
+                                     }
+
+if ( 0 < Q & Q < ncol(mXX) )         {
+  
+   #xx = tXX = cbind(mXX[,loc],mXX[,-loc])   ## corrected by KJY
+   xx = tXX = cbind(XX[,loc],XX[,-loc])  
+
+   #yy = (r1-1*mean(r1))/sd(r1)  
+   yy = (r1-0*mean(r1))/sd(r1)                             ## Correction ## 
+
+   mcv = matrix(0,nXX,2)
+   
+  for ( j in 1:nXX) 
+                     { 
+               mcv[j,1] = mean(tXX[,j]) 
+               mcv[j,2] = sd(tXX[,j]) 
+               #xx[,j] = (tXX[,j] - 1*mcv[j,1])/mcv[j,2]  
+		   xx[,j] = (tXX[,j] - 0*mcv[j,1])/mcv[j,2]    ## Correction ##
+
+                     } 
+  
+  rpp = L2.SCAD(xx,yy,1.0,1.0,max.iter,Q,break.rule=50) 
+  rbeta = rep(0,nXX+0)  
+  taberr = matrix(0,nrow(rpp$SCAD.beta.mat),2)  
+  taberr[,1] = rpp$SCAD.lambda ; 
+  
+  for ( j in 1:nrow(taberr)) 
+                            {   
+    rsd = yy - xx%*%(rpp$SCAD.beta.mat[j,])  
+    taberr[j,2] = log(mean(rsd^2))+sum(rpp$SCAD.beta.mat[j,]!=0)*log(N)/N  
+                            }   
+    min.loc = which.min(taberr[,2]) ;  
+  
+  for ( j in 1:nXX) 
+                   { 
+            rbeta[j] = sd(r1)*rpp$SCAD.beta.mat[min.loc,][j]/mcv[j,2] 
+                   } 
+
+    #bt2[1] = bt2[1]+mean(r1)-sd(r1)*sum(rpp$SCAD.beta.mat[min.loc,]*mcv[,1]/mcv[,2]) ## Correction 
+
+    bt1 = rbeta 
+    bt1[loc] = rbeta[1:Q] 
+    bt1[-loc] = rbeta[-c(1:Q)]              
+                                          } 
+
+if (Q==ncol(mXX)) 
+                 { 
+            bt1 = coef(lm(r1~XX-1)) 
+                 } 
+
+#################################################################### ;
+# step 3 : updating r
+
+bt = c(bt2[1],bt1,bt2[-1])  
+interloc = which(bt2[-1] !=0 )  
+interloc = interloc - 0  
+print(colnames(interX)[interloc]) 
+
+loc = which(bt[-1]!=0) 
+Anal = data.frame(YY,cbind(mXX,interX)[,loc]) 
+nn = lm(YY~., data=Anal)  
+dip = which(is.na(coef(nn))) 
+
+if ( length(dip) >0 ) 
+                     { 
+              Anal=Anal[,-dip] 
+                     } 
+nloc = ncol(Anal)-1 
+
+name_resp = colnames(Anal)[1] 
+JJ= paste('X',1:nloc,sep='') 
+names(Anal)[-1] = JJ 
+SO = JJ[1] 
+
+for ( i in 1:(length(JJ)-1) ) 
+                        {
+SO = paste(SO,JJ[i+1],sep='+')  
+                        } 
+gg = as.formula(paste(name_resp,"~",SO)) 
+Fit = lme(gg,data=Anal,random = ~ 1|fam_id) ;
+kj =capture.output(Fit) 
+id = which (kj == "Random effects:") 
+f.out = factor(strsplit(kj[id+3], " ")[[1]]) 
+f.out = as.numeric(as.character(f.out)) 
+n.out = f.out[-which(is.na(f.out))]   
+#n.out = as.numeric(as.character(f.out)[-1])
+#print(crtt)  
+
+
+ 
+r = n.out[1]^2/(n.out[1]^2+n.out[2]^2) 
+print(r) 
+crtt = abs(r.v-r)   
+crtt = mean( c(crtt^2,(bt0-bt)^2) )  
+r.v = r   
+bt0 = bt 
+print("*********")
+print(paste(iop, "-th iteration", sep=""))
+print("*********")
+print(bt)
+print(c("r   =  ", r))
+print(c("r.v =  ", r.v))
+print(c("crtt=  ",crtt))
+#break
+           }#end of WHILE
+nam = c('Intercept',colnames(mXX),colnames(interX)) 
+rdat = list(YY=YY, mXX=mXX, interX=interX, nam=nam, bt=bt, r=r)  
+return(rdat)                    
+           } #end Of R_SCAD
+
+
+##################################################
+###         Function: LASSO_v1                ###
+### Argumnts ######################################################################################
+## YY: response
+## XX: main effects having variable names
+## interNam: interaction table for estimation (each row has the name1 and name2 from main effects)
+## offnam: names of the offset varaibles.
+##################################################################################################
+
+
+LASSO_v1 = function(YY,XX,offnam,interNam)  
+   {     
+   Nam = colnames(XX)
+   mXX = XX 
+   optname = offnam                        
+
+   interX = matrix(0,nrow(mXX),nrow(interNam))
+   colnames(interX) = paste(interNam[,1],interNam[,2],sep=':')
+
+   for ( j in 1:ncol(interX)) 
+      {
+        interX[,j] = mXX[,which(colnames(mXX)==interNam[j,1])]*
+                     mXX[,which(colnames(mXX)==interNam[j,2])]
+      }                  
+
+   mm = apply(interX,2,sd) 
+  idx = which(mm==0)  
+   if (length(idx)>0)  
+      {    
+      interX = interX[,-idx] 
+      interNam = interNam[-idx,]
+      }  
+
+   mXX = as.matrix(mXX)
+   interX = as.matrix(interX)
+   CXX= cbind(mXX,interX)
+   N = nrow(CXX)  
+
+  lg  = cv.glmnet(CXX,YY,family="gaussian") 
+  gg = lg$lambda ;
+  taberr = rep(0,length(gg)) ;
+
+  for ( k in 1:length(gg)) 
+    {
+    lg = glmnet(CXX,YY,family="gaussian",lambda=gg[k]) 
+    Resid = YY-cbind(1,CXX)%*%coef(lg) 
+    tmp = mean(Resid^2)  
+    dff = sum(coef(lg)!=0)-1 
+    taberr[k] = log(tmp)+ dff*log(N)/N 
+    }                     
+   mm = gg[which.min(taberr)] 
+   lgg = glmnet(CXX,YY,lambda=mm,family="gaussian") 
+   bt = as.numeric(coefficients(lgg))
+   nam = c('Intercept',colnames(mXX),colnames(interX)) 
+   rdat = list(YY=YY, mXX=mXX, interX=interX, nam=nam, bt=bt, r=0)  
+   return(rdat) 
+    }  #end of LASSO
+
+
+##################################################
+###         Function: HierNet_v1                ###
+### Argumnts ######################################################################################
+## YY: response
+## XX: main effects having variable names
+##################################################################################################
+
+HierNet_v1 = function(YY, XX) 
+
+   { 
+   colnames(XX) = paste('X',1:ncol(XX),sep='')  
+   YY.s = YY - mean(YY) 
+   YY.s = as.numeric(YY.s) 
+   CXX.s = XX ;
+   for ( j in 1:ncol(CXX.s)) 
+      {
+      CXX.s[, j] = XX[, j] - mean(XX[, j]) 
+      CXX.s[, j] = CXX.s[, j] / sd(XX[, j]) 
+      }
+       
+   fitB = hierNet.path(CXX.s[ , ], YY.s, strong=T, niter=900,
+                       diagonal=F) 
+                       
+   llkk = ncol(fitB$bn) 
+   ert = rep(0, llkk);
+   resid1 = rep(0, llkk);
+   resid2 = rep(0, llkk);
+
+   for ( jj in 1:llkk ) 
+     {
+    main.bn = (fitB$bp[, jj] - fitB$bn[, jj])       
+    D = ncol(CXX.s) 
+     chff = rep(0, D * (D-1) / 2)  
+     ip = 0  
+     CXX.ff = cbind(as.matrix(CXX.s), matrix(0, length(YY.s), D * (D-1) / 2)) ; 
+  
+   for ( i in 1:(D-1)) 
+      { 
+   for ( j in (i+1):D) 
+      { 
+      ip = ip + 1 
+      chff[ip] = (fitB$th[i, j, jj] + fitB$th[j, i, jj]) / 2 ;
+      tt1 = CXX.s[, i] 
+      tt2 = CXX.s[, j]
+      #if(jj == 1) 
+        { CXX.ff[, D+ip] = tt1 * tt2 ; }
+      } 
+      } 
+      cfg = c(main.bn, chff) ; 
+ 	print(c(jj," -- ",cfg))
+      Resid = YY.s - cbind(CXX.ff %*% cfg) 
+
+	tmpFit=hierNet(CXX.s[,1:10],YY.s, lam=fitB$lamlist[jj])
+	resid2[jj]=(YY.s-predict.hierNet(tmpFit, CXX.s[,1:10]))^2
+	resid1[jj]=Resid^2
+
+      tmp = mean(Resid^2) 
+      dff = sum(cfg != 0) 
+      ert[jj] = log(tmp) + dff * log(N) / N  
+      }  
+      
+         
+   fit = hierNet(CXX.s[ , ], YY.s, fitB$lamlist[which.min(ert)],
+                 strong=T, niter=900) 
+
+   main.bn = (fit$bp - fit$bn)  
+   chff = rep(0, D * (D-1) / 2) 
+   ip = 0
+   int = 0
+   interX = matrix(NA, nrow(XX), D * (D-1) / 2 )
+   colnames(interX) = rep(' ',ncol(interX))   
+
+  for ( i in 1:D) 
+      {
+      main.bn[i] = main.bn[i] / sd(CXX.s[, i])
+      #int = int - main.bn[i] * mean(CXX.s[, i]) /sd(CXX.s[, i])      
+	int = int - main.bn[i] * mean(CXX.s[, i])  ## Corrected 
+      }            
+
+## To be replaced : START##
+               
+#   for ( i in 1:(D-1)) 
+#      {       
+#   for ( j in (i+1):D) 
+#      { 
+#      ip = ip + 1
+#      tmp = (fit$th[i, j] + fit$th[j, i]) / 2  
+#      chff[ip] = tmp / sd(CXX.s[, i]) / sd(CXX.s[, j]) 
+#      main.bn[i] = main.bn[i] - tmp * mean(CXX.s[, j]) / sd(CXX.s[, j]) / sd(CXX.s[, i])
+#
+#      int = int + chff[ip] * mean(CXX.s[, j]) *  
+#            mean(CXX.s[, j]) / sd(CXX.s[, i]) / sd(CXX.s[, j])  
+#      interX[,ip] = XX[,i] * XX[,j] 
+#      colnames(interX)[ip] = paste(colnames(XX)[i],
+#      colnames(XX)[j], sep=':')                                             
+#      }# end_FOR _j
+#      }# end_FOR_i
+#
+#   for ( i in 2:D) 
+#      {       
+#   for ( j in 1:(i-1)) 
+#      { 
+#      tmp = (fit$th[i, j] + fit$th[j, i]) / 2  
+#      main.bn[i] = main.bn[i] - tmp * mean(CXX.s[, j]) / 
+#                   sd(CXX.s[, j]) / sd(CXX.s[, i])              
+#      } #end_FOR_j
+#      } #end_FOR_i
+## To be replaced : END##
+
+
+## code by JY:: START
+ 
+   ip=0            
+   for ( i in 1:(D-1)) 
+      {       
+   for ( j in (i+1):D) 
+      { 
+      ip = ip + 1
+      tmp = (fit$th[i, j] + fit$th[j, i]) / 2  
+      chff[ip] = tmp / sd(CXX.s[, i]) / sd(CXX.s[, j]) 
+      main.bn[i] = main.bn[i] - tmp * mean(CXX.s[, j]) / sd(CXX.s[, j]) / sd(CXX.s[, i])
+      main.bn[j] = main.bn[j] - tmp * mean(CXX.s[, i]) / sd(CXX.s[, j]) / sd(CXX.s[, i]) ## ADDED
+      #print(c(i,j))
+	#print(c(j,i))
+      #int = int + chff[ip] * mean(CXX.s[, j]) *  mean(CXX.s[, j]) / sd(CXX.s[, i]) / sd(CXX.s[, j])  
+      int = int + chff[ip] * mean(CXX.s[, j]) *  mean(CXX.s[, j])   #CORRECTED by GSKIM
+
+      interX[,ip] = XX[,i] * XX[,j] 
+      colnames(interX)[ip] = paste(colnames(XX)[i],
+      colnames(XX)[j], sep=':')                                             
+      }# end_FOR _j
+      }# end_FOR_i
+
+### code by JY:: END
+
+
+   int = mean(YY) + int      
+      
+   
+   bt = c(int, main.bn, chff)   
+   #nam = c('Intercept',colnames(mXX),colnames(interX)) 
+   nam = c('Intercept',colnames(XX),colnames(interX)) 
+   rdat = list(YY = YY, mXX = XX, interX = interX, 
+          nam = nam, bt = bt, r = 0) 
+   return(rdat)
+      }    # end of HierNet 
