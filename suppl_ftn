@@ -1,0 +1,226 @@
+################
+## Supp. ftn. 1 
+################  
+
+L2.SCAD = function(x,y,a,d,max.iter,Q,break.rule=50)
+{
+a.mat<- t(x)%*%x/2 ; b.vec<- -drop(t(x)%*%y) 
+
+# Lasso fitting 
+
+beta.mat = unconst.quad.l1(a.mat, b.vec, lambda=0, tol=1e-8,
+             PAT=TRUE, TRACE=FALSE,Q)$Beta.vec
+lasso.beta.mat = beta.mat[,-1]
+lasso.lambda.vec = beta.mat[,-1] 
+            
+# One - Step
+
+  for (j in 1:nrow(beta.mat))
+  {
+  beta.vec = beta.mat[j,-1] ; lambda.j = beta.mat[j,1]
+  b.vec<- -drop(t(x)%*%y) + Grad.Tilde.SCAD(beta.vec, a, lambda.j, Q)
+  beta.vec = unconst.quad.l1(a.mat, b.vec, lambda.j, tol=10e-8,
+             PAT=F, TRACE=F, Q)$beta.vec
+  beta.mat[j,-1] = beta.vec
+  }#end FOR
+
+  SCAD.beta.mat = beta.mat[,-1]
+  SCAD.lambda.vec = beta.mat[,1]              
+  return(list(SCAD.beta.mat = SCAD.beta.mat, SCAD.lambda=SCAD.lambda.vec,
+  lasso.beta.mat = lasso.beta.mat))
+}#end of "L2.SCAD"
+
+BIC.L2 = function(X,Y,beta.mat,tune=1)
+ {
+  x=X; y=Y
+  beta0.vec = beta.mat[,1]
+  beta.mat = beta.mat[,-1]
+  o.sign.vec = beta.mat[1,]!=0
+  o.beta.vec = beta.mat[1,]
+  BIC.v = Inf
+  n.beta.vec = rep(0,ncol(beta.mat))
+  n.beta0.vec = beta0.vec[1]
+  
+  for (i in 2:nrow(beta.mat))
+  {
+    n.sign.vec = beta.mat[i,]!=0
+    if (  sum( abs(n.sign.vec-o.sign.vec) ) == 0 ) next
+    o.sign.vec = n.sign.vec
+    t.x = cbind(1,x[,o.sign.vec,drop=F])
+    inv.x = solve(t(t.x)%*%t.x)
+    beta.vec = inv.x%*%t(t.x)%*%y
+    RSS = sum((y-t.x%*%beta.vec)^2)
+    M_lambda = sum(beta.vec != 0)
+    tmp = log(RSS) + M_lambda*log(log(nrow(x)))*log(ncol(x) + 1)/nrow(x)*tune
+    if ( tmp < BIC.v )
+    {
+     BIC.v = tmp
+     n.beta.vec[o.sign.vec] = beta.vec[-1]
+     n.beta.vec[!o.sign.vec] = 0
+     n.beta0.vec =  beta.vec[1]
+    }#end IF
+  }#end FOR
+  c(n.beta0.vec, n.beta.vec)
+ }#end of "BIC.L2"
+
+
+# (deriv of MC penalty) - (deriv of lasso)
+
+Grad.Tilde.MCP<-function(beta.vec,a,lambda)
+  {
+  if (class(beta.vec)!='numeric') stop()
+  if (a<=0) stop()
+  beta.vec<-beta.vec
+  grad.vec<-rep(0,length(beta.vec))
+  abs.beta.vec<-abs(beta.vec)
+  sign.beta.vec<-sign(beta.vec)
+  r1.ind<- (abs.beta.vec<a*lambda)
+
+  if (sum(r1.ind)>0)  grad.vec[r1.ind]<- -beta.vec[r1.ind]/a
+  if (sum(!r1.ind)>0) grad.vec[!r1.ind]<- -lambda*sign(beta.vec[!r1.ind])
+  return(grad.vec)
+  }# end of "Grad.Tilde.MCP"
+
+# (deriv of SCAD penalty) - (deriv of lasso)
+
+Grad.Tilde.SCAD<-function(beta.vec,a,lambda,Q)
+  {
+  if (class(beta.vec)!='numeric') stop()
+  if (a<=0) stop()
+  beta.vec<-beta.vec
+  grad.vec<-rep(0,length(beta.vec))
+  abs.beta.vec<-abs(beta.vec)
+  sign.beta.vec<-sign(beta.vec)
+  r1.ind<- (abs.beta.vec<a*lambda&abs.beta.vec>=lambda)
+  r2.ind<- (abs.beta.vec>=a*lambda)
+
+  if (sum(r1.ind)>0)  grad.vec[r1.ind]<- -(beta.vec[r1.ind]-lambda*sign(beta.vec[r1.ind]))/(a-1)
+  if (sum(r2.ind)>0) grad.vec[r2.ind]<- -lambda*sign(beta.vec[r2.ind])
+  grad.vec[1:Q] = 0 ; 
+  return(grad.vec)
+  }#end of "Grad.Tilde.SCAD"
+  
+################
+## Supp. ftn. 2 
+################ 
+
+## beta.vec = argmin_x ( x'Ax + x'b + lambda*||x||_1 )
+quad.l1 <- function(a.mat, b.vec, lambda, tol = 1e-8, PATH=TRUE,TRACE = FALSE,
+break.rule=50)
+
+{
+    p <- length(b.vec)
+    gamma.vec <- rep(0, p); act.ind <- rep(FALSE, p)
+    
+    act.cand <- which.max(abs(b.vec)); act.ind[act.cand] <- TRUE; num.act <- 1
+    
+    step.idx <- 1
+    
+    current.lambda <- max(abs(b.vec)) # Initialization : current.lambda
+    if (PATH==TRUE)    Beta.vec<-c(current.lambda,rep(0,p))  else Beta.vec<-NULL
+    if(lambda > current.lambda)
+        lambda <- current.lambda
+    
+    beta.vec <- rep(0, p) #Initialization : beta.vec
+    while(current.lambda > 0){
+    
+        # gradient vector
+      
+        grad.vec <- drop(2.0*a.mat%*%beta.vec + b.vec)
+        gamma.vec[act.ind] <- solve(2*a.mat[act.ind, act.ind], sign(grad.vec[act.ind])); gamma.vec[!act.ind] <- 0
+        
+        # start : finding step length, d        
+        
+        hess.gamma <- drop(2.0*a.mat%*%gamma.vec)
+        
+        d11.vec <- (current.lambda - grad.vec)/(1 - hess.gamma); d11.vec[act.ind] <- Inf; d11.vec[(d11.vec < tol)|(d11.vec < 0)] <- Inf
+        d12.vec <- (current.lambda + grad.vec)/(1 + hess.gamma); d12.vec[act.ind] <- Inf; d12.vec[(d12.vec < tol)|(d12.vec < 0)] <- Inf
+        d1.vec <- apply(rbind(d11.vec, d12.vec), 2, min)
+        act.cand1 <- which.min(d1.vec); d1 <- min(d1.vec)
+        
+        d2.vec <- beta.vec/gamma.vec; d2.vec[!act.ind] <- Inf ; d2.vec[(d2.vec < tol)|(d2.vec < 0)] <- Inf
+        act.cand2 <- which.min(d2.vec); d2 <- min(d2.vec)  
+            
+        if ( d1=='NaN' ) d1= 'Inf' ; if ( d2=='NaN' ) d2= 'Inf' ;  
+        
+        if(d1 < d2){
+        
+            d <- d1; act.ind[act.cand1] <- TRUE; act.cand <- act.cand1; num.act <- num.act + 1
+        } else {
+        
+            d <- d2; act.ind[act.cand2] <- FALSE; act.cand <- (-1)*act.cand2; num.act <- num.act - 1
+        }
+        
+        if((current.lambda - d) < 0) d <- current.lambda
+        if((d1 == Inf) & (d2 == Inf)) d <- current.lambda
+        
+        # end : finding step length, d
+    
+        if(TRACE == TRUE){
+            #cat(round(beta.vec, 5), "\n")                
+            cat("# SETP :", step.idx, "# ACT.VAR :", act.cand, "# LAMBDA :", current.lambda, "\n")
+            #cat(round(gamma.vec, 5), "\n") 
+        }
+    
+        if((current.lambda - d) < lambda){
+        
+            beta.vec <- beta.vec - (current.lambda - lambda)*gamma.vec
+        if (PATH==TRUE)    Beta.vec<-rbind(Beta.vec,c(current.lambda- lambda,beta.vec))
+            break 
+        }
+        if(sum(beta.vec!=0)>break.rule) break
+        step.idx <- step.idx + 1
+        
+        # current.lambda
+        
+        current.lambda <- current.lambda - d
+        #print('LAM') ; print(current.lambda) 
+        if(current.lambda <= 0) { current.lambda <- 0 } 
+        
+        # beta.vec
+        
+        beta.vec <- beta.vec - d*gamma.vec; 
+        if (sum(beta.vec!=0)< p)  beta.vec[!act.ind] <- 0
+        if (PATH==TRUE)
+        {
+        Beta.vec<-rbind(Beta.vec,c(current.lambda,beta.vec))
+        }
+
+    }
+    return(list(beta.vec=beta.vec,Beta.vec=Beta.vec))
+}#end of "quad.l1"
+
+unconst.quad.l1 <- function(a.mat, b.vec, lambda, tol = 1e-8, PAT=TRUE, TRACE = FALSE, Q){
+
+    P  <- length(b.vec)
+    if(Q == 0){
+
+        beta.vec   <- quad.l1(a.mat=a.mat, b.vec=b.vec, lambda=lambda, tol=tol, PATH=PAT,TRACE = FALSE)$beta.vec
+        Beta.vec   <- quad.l1(a.mat=a.mat, b.vec=b.vec, lambda=lambda, tol=tol, PATH=PAT,TRACE = FALSE)$Beta.vec
+             }
+    else{
+
+        # arg.a.mat = M22 - M21*inv(M11)*M12, arg.b.vec = v2 - M21*inv(M11)*v1
+
+          beta2 <- quad.l1(a.mat[(Q+1):P, (Q+1):P] - a.mat[(Q+1):P, 1:Q]%*%solve(a.mat[1:Q, 1:Q])%*%a.mat[1:Q, (Q+1):P],
+                         b.vec[(Q+1):P] - a.mat[(Q+1):P, 1:Q]%*%solve(a.mat[1:Q, 1:Q])%*%b.vec[1:Q], 
+                         lambda, tol, PATH=PAT, FALSE)
+        # beta1 = -inv(M11)*(M12*beta1 + v1/2)
+
+          beta1    <- (-1)*solve(a.mat[1:Q, 1:Q], 
+                                 as.matrix(a.mat[1:Q, (Q+1):P])%*%as.matrix(beta2$beta.vec) + 
+                                 b.vec[1:Q]/2) 
+          beta.vec <- c(beta1,beta2$beta.vec) 
+          Beta.vec <- beta.vec 
+ 
+          if (PAT==TRUE) {
+          nn       <- nrow(beta2$Beta.vec) 
+          Beta.vec <- cbind(beta2$Beta.vec[,1],matrix(0,nn,Q),beta2$Beta.vec[,-1])  
+          for ( j in 1:nrow(Beta.vec)) 
+          { Beta.vec[j,2:(Q+1)]  <- (-1)*solve(a.mat[1:Q, 1:Q], a.mat[1:Q, (Q+1):P]%*%as.matrix(beta2$beta.vec) + b.vec[1:Q]/2) }         
+                        }
+        }
+    return(list(beta.vec=beta.vec,Beta.vec=Beta.vec))
+}# end of "unconst.quad.l1 "
+
+
